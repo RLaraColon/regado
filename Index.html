@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador de Riego con Arduino</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @keyframes spin-slow {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .animate-spin-pump {
+      animation: spin-slow 0.4s linear infinite;
+    }
+    @keyframes water-drip {
+      0% { transform: translateY(-5px); opacity: 0; }
+      50% { opacity: 0.9; }
+      100% { transform: translateY(40px); opacity: 0; }
+    }
+    .drop-particle {
+      animation: water-drip 0.7s ease-in infinite;
+    }
+    /* Estilos personalizados para la consola y líneas de código */
+    .active-code-line {
+      background-color: rgba(59, 130, 246, 0.25);
+      border-left: 3px solid #3b82f6;
+    }
+    pre code {
+      font-family: 'Fira Code', 'Consolas', monospace;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans">
+
+  <header class="bg-slate-900 border-b border-slate-800 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <div class="bg-emerald-500/10 p-2.5 rounded-xl border border-emerald-500/20 text-emerald-400">
+        <i class="fa-solid fa-microchip text-xl"></i>
+      </div>
+      <div>
+        <h1 class="font-bold text-lg text-white flex items-center gap-2">
+          Arduino Irrigation Lab
+          <span class="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-mono border border-emerald-500/30">UNO R3</span>
+        </h1>
+        <p class="text-xs text-slate-400">Simulador de Riego por Humedad de Suelo y Relé</p>
+      </div>
+    </div>
+
+    <!-- Indicador global de estado -->
+    <div class="flex items-center gap-3">
+      <div id="statusBadge" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs font-medium text-slate-300">
+        <span class="w-2.5 h-2.5 rounded-full bg-slate-500 animate-pulse" id="statusDot"></span>
+        <span id="statusText">STANDBY</span>
+      </div>
+      <button id="btnPower" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 transition-colors text-white text-xs font-semibold rounded-lg flex items-center gap-2 shadow-lg shadow-emerald-900/30">
+        <i class="fa-solid fa-power-off"></i> Reiniciar MCU
+      </button>
+    </div>
+  </header>
+
+  <main class="flex-1 p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-7xl mx-auto w-full">
+    
+    <!-- Columna Izquierda: Simulación Visual de la Planta y Bomba (7 Cols) -->
+    <div class="lg:col-span-7 flex flex-col gap-6">
+      
+      <!-- Contenedor del Terrario / Entorno Visual -->
+      <div class="bg-slate-900 rounded-2xl border border-slate-800 p-6 shadow-xl relative overflow-hidden flex flex-col justify-between min-h-[440px]">
+        
+        <!-- Header superior del viewport interactivo -->
+        <div class="flex justify-between items-center z-10">
+          <div class="flex items-center gap-2 bg-slate-950/60 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-800">
+            <i class="fa-solid fa-droplet text-blue-400 text-sm"></i>
+            <span class="text-xs font-medium text-slate-300">Humedad Suelo:</span>
+            <span id="labelHumedadPct" class="font-bold text-sm text-blue-400">25%</span>
+          </div>
+          
+          <div class="flex items-center gap-2 bg-slate-950/60 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-800">
+            <span class="text-xs text-slate-400">Pin 7 (Relé):</span>
+            <span id="pinRelayState" class="px-2 py-0.5 rounded text-xs font-mono font-bold bg-slate-800 text-slate-400">HIGH (OFF)</span>
+          </div>
+        </div>
+
+        <div class="relative w-full h-72 flex items-end justify-around my-auto select-none">
+          
+          <!-- Tanque y Bomba de Agua -->
+          <div class="flex flex-col items-center">
+            <!-- Bomba de Agua Exterior -->
+            <div class="relative flex items-center mb-2">
+              <div id="pumpBody" class="w-20 h-16 bg-slate-800 rounded-lg border-2 border-slate-700 shadow-md flex items-center justify-center p-2 relative">
+                <!-- Rotor giratorio de la bomba -->
+                <div id="pumpImpeller" class="w-8 h-8 rounded-full border-2 border-dashed border-slate-500 flex items-center justify-center text-slate-400 transition-all duration-300">
+                  <i class="fa-solid fa-gear text-sm"></i>
+                </div>
+                <!-- LED indicador de estado en la bomba -->
+                <span id="pumpLed" class="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-slate-600"></span>
+                <!-- Conector manguera salida -->
+                <div class="absolute -right-3 top-6 w-3 h-3 bg-slate-700 rounded-r"></div>
+              </div>
+              <span class="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] text-slate-400 font-mono tracking-wider">BOMBA 12V</span>
+            </div>
+
+            <!-- Reservorio de Agua -->
+            <div class="w-28 h-32 rounded-xl bg-slate-950/80 border-2 border-slate-700 relative overflow-hidden flex flex-col justify-end shadow-inner">
+              <div id="waterLevel" class="w-full bg-blue-500/40 border-t-2 border-blue-400/80 transition-all duration-500 relative" style="height: 75%;">
+                <div class="w-full h-1 bg-blue-300/40 animate-pulse"></div>
+              </div>
+              <span class="absolute bottom-2 inset-x-0 text-center text-[10px] font-mono text-slate-300 font-semibold drop-shadow">RESERVORIO</span>
+            </div>
+          </div>
+
+          <!-- Manguera de Distribución (Curva SVG animada) -->
+          <svg class="absolute top-12 left-28 right-40 h-28 pointer-events-none z-10 w-44 md:w-56" viewBox="0 0 200 100" fill="none">
+            <path d="M 0 35 C 60 10, 140 10, 190 85" stroke="#334155" stroke-width="6" stroke-linecap="round"/>
+            <path id="waterFlow" d="M 0 35 C 60 10, 140 10, 190 85" stroke="#38bdf8" stroke-width="4" stroke-dasharray="8 6" stroke-linecap="round" class="opacity-0 transition-opacity duration-300"/>
+          </svg>
+
+          <!-- Gotero animado -->
+          <div id="dropper" class="absolute top-36 right-36 md:right-48 flex flex-col items-center opacity-0 pointer-events-none transition-opacity duration-300">
+            <i class="fa-solid fa-droplet text-blue-400 text-xs drop-particle"></i>
+            <i class="fa-solid fa-droplet text-cyan-300 text-xs drop-particle" style="animation-delay: 0.35s"></i>
+          </div>
+
+          <!-- Planta y Maceta -->
+          <div class="flex flex-col items-center relative">
+            
+            <!-- Sensor de humedad insertado en la maceta -->
+            <div class="absolute -top-10 -right-6 flex flex-col items-center">
+              <div class="w-3.5 h-12 bg-amber-800 rounded-b border border-amber-600 flex flex-col justify-around items-center py-1">
+                <span class="w-2 h-0.5 bg-yellow-400 rounded-full"></span>
+                <span class="w-2 h-0.5 bg-yellow-400 rounded-full"></span>
+              </div>
+              <span class="text-[9px] text-amber-300 font-mono mt-0.5">YL-69</span>
+            </div>
+
+            <!-- Ilustración SVG Dinámica de la Planta -->
+            <div id="plantContainer" class="transition-transform duration-700 origin-bottom transform">
+              <svg width="120" height="130" viewBox="0 0 100 120" fill="none" class="overflow-visible">
+                <!-- Tallo central -->
+                <path d="M 50 120 Q 48 70 50 30" stroke="#16a34a" stroke-width="4" stroke-linecap="round"/>
+                
+                <!-- Hojas con curvatura reactiva -->
+                <!-- Hoja Izquierda Inferior -->
+                <path id="leafL1" d="M 50 90 C 20 85 10 65 30 55 C 45 60 50 85 50 90" fill="#22c55e" class="transition-all duration-700"/>
+                <!-- Hoja Derecha Inferior -->
+                <path id="leafR1" d="M 50 75 C 80 70 90 50 70 40 C 55 45 50 70 50 75" fill="#16a34a" class="transition-all duration-700"/>
+                <!-- Hoja Superior Izquierda -->
+                <path id="leafL2" d="M 50 50 C 25 40 25 20 45 15 C 50 25 50 45 50 50" fill="#4ade80" class="transition-all duration-700"/>
+                <!-- Flor / Brote -->
+                <circle cx="50" cy="25" r="7" fill="#fbbf24" class="transition-colors duration-500" id="plantFlower"/>
+                <circle cx="50" cy="25" r="3" fill="#f59e0b"/>
+              </svg>
+            </div>
+
+            <!-- Maceta con sustrato -->
+            <div class="w-32 h-20 bg-amber-900 border-2 border-amber-700 rounded-b-3xl relative shadow-lg overflow-hidden flex flex-col justify-between items-center p-1">
+              <div id="soilLayer" class="w-full h-4 bg-amber-950 rounded-t-lg transition-colors duration-500 border-b border-amber-800"></div>
+              <span class="text-[10px] font-mono text-amber-200/60 font-semibold mb-2">SUSTRATO</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-4 pt-4 border-t border-slate-800/80 grid grid-cols-1 md:grid-cols-3 gap-4 z-10">
+          
+          <!-- Control de Sequedad / Evaporación -->
+          <div class="bg-slate-950/70 p-3 rounded-xl border border-slate-800">
+            <div class="flex justify-between text-xs mb-1">
+              <span class="text-slate-400">Humedad manual:</span>
+              <span id="sliderVal" class="text-blue-400 font-mono font-bold">25%</span>
+            </div>
+            <input type="range" id="moistureSlider" min="0" max="100" value="25" class="w-full accent-blue-500 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer">
+            <p class="text-[10px] text-slate-500 mt-1">Ajusta para probar umbrales</p>
+          </div>
+
+          <!-- Modo de Operación -->
+          <div class="bg-slate-950/70 p-3 rounded-xl border border-slate-800 flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+              <span class="text-xs text-slate-400">Modo Auto:</span>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" id="autoModeToggle" checked class="sr-only peer">
+                <div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
+            </div>
+            <div class="flex gap-2 mt-2">
+              <button id="btnManualPump" class="w-full py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-xs rounded-lg border border-slate-700 font-medium text-slate-300 transition-colors disabled:opacity-50">
+                Pulsar Riego
+              </button>
+            </div>
+          </div>
+
+          <!-- Simulación de clima dinámico -->
+          <div class="bg-slate-950/70 p-3 rounded-xl border border-slate-800 flex flex-col justify-between">
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-slate-400">Evaporación Solar:</span>
+              <span id="evaporationBadge" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">ACTIVA</span>
+            </div>
+            <button id="btnToggleEvap" class="mt-2 text-xs py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-slate-300 transition-colors">
+              Pausar Secado Natural
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Monitor Serial estilo Arduino IDE -->
+      <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 shadow-xl flex flex-col h-48">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-terminal text-emerald-400 text-xs"></i>
+            <span class="text-xs font-mono font-semibold text-slate-300">Monitor Serie (9600 baud)</span>
+          </div>
+          <button id="btnClearSerial" class="text-xs text-slate-400 hover:text-white px-2 py-0.5 rounded bg-slate-800">
+            Limpiar
+          </button>
+        </div>
+        <div id="serialConsole" class="flex-1 overflow-y-auto font-mono text-xs text-emerald-400 p-2 space-y-1 select-text">
+          <!-- Salida de log serial -->
+        </div>
+      </div>
+
+    </div>
+
+    <div class="lg:col-span-5 flex flex-col bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden shadow-xl">
+      <!-- Barra de pestañas del IDE -->
+      <div class="bg-slate-950 px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <i class="fa-brands fa-usb text-blue-400"></i>
+          <span class="text-xs font-mono text-slate-300 font-semibold">SistemaRiego.ino</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <button id="btnCopyCode" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded border border-slate-700 flex items-center gap-1 transition-colors">
+            <i class="fa-regular fa-copy"></i> Copiar
+          </button>
+        </div>
+      </div>
+
+      <!-- Visor de Código interactivo con seguimiento de línea -->
+      <div class="p-3 bg-slate-950 flex-1 overflow-y-auto text-[11px] leading-5 font-mono text-slate-300 select-text">
+        <pre><code id="codeBlock" class="block">
+<span id="line1" class="block px-2">const int PIN_RELE = 7;</span>
+<span id="line2" class="block px-2">const int PIN_SENSOR = A0;</span>
+<span id="line3" class="block px-2">const int UMBRAL_SECO = 700; // Sensor invertido</span>
+<span id="line4" class="block px-2"></span>
+<span id="line5" class="block px-2">void setup() {</span>
+<span id="line6" class="block px-2">  pinMode(PIN_RELE, OUTPUT);</span>
+<span id="line7" class="block px-2">  digitalWrite(PIN_RELE, HIGH); // Apagado</span>
+<span id="line8" class="block px-2">  Serial.begin(9600);</span>
+<span id="line9" class="block px-2">}</span>
+<span id="line10" class="block px-2"></span>
+<span id="line11" class="block px-2">void loop() {</span>
+<span id="line12" class="block px-2 transition-colors duration-200">  int raw = analogRead(PIN_SENSOR);</span>
+<span id="line13" class="block px-2 transition-colors duration-200">  Serial.print("Humedad ADC: "); Serial.println(raw);</span>
+<span id="line14" class="block px-2"></span>
+<span id="line15" class="block px-2 transition-colors duration-200">  if (raw >= UMBRAL_SECO) {</span>
+<span id="line16" class="block px-2 transition-colors duration-200">    // Suelo seco -> Activar bomba</span>
+<span id="line17" class="block px-2 transition-colors duration-200">    digitalWrite(PIN_RELE, LOW);</span>
+<span id="line18" class="block px-2 transition-colors duration-200">    Serial.println(">> BOMBA ACTIVADA [REGANDO]");</span>
+<span id="line19" class="block px-2 transition-colors duration-200">  } else {</span>
+<span id="line20" class="block px-2 transition-colors duration-200">    // Suelo húmedo -> Apagar bomba</span>
+<span id="line21" class="block px-2 transition-colors duration-200">    digitalWrite(PIN_RELE, HIGH);</span>
+<span id="line22" class="block px-2 transition-colors duration-200">    Serial.println(">> Bomba en reposo");</span>
+<span id="line23" class="block px-2 transition-colors duration-200">  }</span>
+<span id="line24" class="block px-2 transition-colors duration-200">  delay(1000);</span>
+<span id="line25" class="block px-2">}</span>
+</code></pre>
+      </div>
+
+      <!-- Barra de estado del microcontrolador -->
+      <div class="bg-slate-950/80 px-4 py-2 border-t border-slate-800 text-[10px] text-slate-400 flex justify-between items-center font-mono">
+        <span>RAM: 342B / 2048B (16%)</span>
+        <span class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-emerald-500"></span> COM3 Conectado
+        </span>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    // Variables de Estado de la Simulación
+    const STATE = {
+      moisturePct: 25,       // 0% a 100%
+      pumpActive: false,
+      autoMode: true,
+      naturalEvap: true,
+      mcuRunning: true,
+      tankLevel: 80,
+      loopInterval: null,
+      evapInterval: null
+    };
+
+    // Elementos DOM
+    const moistureSlider = document.getElementById('moistureSlider');
+    const labelHumedadPct = document.getElementById('labelHumedadPct');
+    const sliderVal = document.getElementById('sliderVal');
+    const pinRelayState = document.getElementById('pinRelayState');
+    const pumpImpeller = document.getElementById('pumpImpeller');
+    const pumpLed = document.getElementById('pumpLed');
+    const pumpBody = document.getElementById('pumpBody');
+    const waterFlow = document.getElementById('waterFlow');
+    const dropper = document.getElementById('dropper');
+    const serialConsole = document.getElementById('serialConsole');
+    const plantContainer = document.getElementById('plantContainer');
+    const soilLayer = document.getElementById('soilLayer');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const autoModeToggle = document.getElementById('autoModeToggle');
+    const btnManualPump = document.getElementById('btnManualPump');
+    const btnToggleEvap = document.getElementById('btnToggleEvap');
+    const evaporationBadge = document.getElementById('evaporationBadge');
+    const btnClearSerial = document.getElementById('btnClearSerial');
+    const btnPower = document.getElementById('btnPower');
+    const btnCopyCode = document.getElementById('btnCopyCode');
+
+    // Mapeo de porcentaje (0-100%) a lectura ADC invertida común en sensores resistivos YL-69 (1023 = seco, 0 = agua pura)
+    function getAdcValue(pct) {
+      return Math.round(1023 - (pct * 8.23));
+    }
+
+    function logSerial(msg) {
+      const now = new Date();
+      const timeStr = now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
+      const div = document.createElement('div');
+      div.className = "hover:bg-slate-800/50 px-1 rounded transition-colors";
+      div.textContent = `[${timeStr}] ${msg}`;
+      serialConsole.appendChild(div);
+      serialConsole.scrollTop = serialConsole.scrollHeight;
+
+      // Limitar historial a 60 líneas
+      if (serialConsole.childNodes.length > 60) {
+        serialConsole.removeChild(serialConsole.firstChild);
+      }
+    }
+
+    function highlightLines(lineIds) {
+      // Limpiar anteriores
+      for (let i = 11; i <= 24; i++) {
+        const line = document.getElementById(`line${i}`);
+        if (line) line.classList.remove('active-code-line');
+      }
+      // Resaltar activas
+      lineIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('active-code-line');
+      });
+    }
+
+    function updateVisuals() {
+      // 1. Indicadores numéricos
+      labelHumedadPct.textContent = `${Math.round(STATE.moisturePct)}%`;
+      sliderVal.textContent = `${Math.round(STATE.moisturePct)}%`;
+      moistureSlider.value = Math.round(STATE.moisturePct);
+
+      // 2. Estado de la bomba y agua
+      if (STATE.pumpActive) {
+        pumpImpeller.classList.add('animate-spin-pump');
+        pumpImpeller.classList.remove('text-slate-400');
+        pumpImpeller.classList.add('text-blue-400');
+        pumpLed.className = "absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-emerald-400 shadow-lg shadow-emerald-500/80";
+        pumpBody.classList.add('border-blue-500/60');
+        waterFlow.classList.remove('opacity-0');
+        dropper.classList.remove('opacity-0');
+        pinRelayState.textContent = "LOW (ON)";
+        pinRelayState.className = "px-2 py-0.5 rounded text-xs font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+      } else {
+        pumpImpeller.classList.remove('animate-spin-pump');
+        pumpImpeller.classList.add('text-slate-400');
+        pumpImpeller.classList.remove('text-blue-400');
+        pumpLed.className = "absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-slate-600";
+        pumpBody.classList.remove('border-blue-500/60');
+        waterFlow.classList.add('opacity-0');
+        dropper.classList.add('opacity-0');
+        pinRelayState.textContent = "HIGH (OFF)";
+        pinRelayState.className = "px-2 py-0.5 rounded text-xs font-mono font-bold bg-slate-800 text-slate-400";
+      }
+
+      // 3. Aspecto y salud de la planta según la humedad
+      const pct = STATE.moisturePct;
+      if (pct < 20) {
+        // Marchita / Seca
+        plantContainer.style.transform = "rotate(10deg) scale(0.92)";
+        document.getElementById('leafL1').setAttribute('fill', '#854d0e'); // Marrón seco
+        document.getElementById('leafR1').setAttribute('fill', '#a16207');
+        document.getElementById('soilLayer').style.backgroundColor = '#78350f'; // Suelo claro/reseco
+      } else if (pct >= 20 && pct <= 80) {
+        // Estado Óptimo y Vigoroso
+        plantContainer.style.transform = "rotate(0deg) scale(1)";
+        document.getElementById('leafL1').setAttribute('fill', '#22c55e');
+        document.getElementById('leafR1').setAttribute('fill', '#16a34a');
+        document.getElementById('soilLayer').style.backgroundColor = '#451a03'; // Suelo húmedo oscuro
+      } else {
+        // Exceso de agua / Saturación
+        plantContainer.style.transform = "rotate(-4deg) scale(1.02)";
+        document.getElementById('leafL1').setAttribute('fill', '#15803d');
+        document.getElementById('leafR1').setAttribute('fill', '#166534');
+        document.getElementById('soilLayer').style.backgroundColor = '#1c1917'; // Fango negro
+      }
+    }
+
+    function executeArduinoLoop() {
+      if (!STATE.mcuRunning) return;
+
+      const adc = getAdcValue(STATE.moisturePct);
+      highlightLines(['line12', 'line13']);
+
+      logSerial(`analogRead(A0) = ${adc} [Hum: ${Math.round(STATE.moisturePct)}%]`);
+
+      if (STATE.autoMode) {
+        // En código de Arduino: if (raw >= UMBRAL_SECO) -> Regar
+        if (adc >= 700) {
+          // Seco (menos de ~40% humedad)
+          setTimeout(() => {
+            highlightLines(['line15', 'line17', 'line18']);
+            if (!STATE.pumpActive) {
+              setPumpState(true);
+              logSerial(">> [RELE ACTIVADO] Suelo seco -> Bomba encendida");
+            }
+          }, 350);
+        } else {
+          // Húmedo
+          setTimeout(() => {
+            highlightLines(['line19', 'line21', 'line22']);
+            if (STATE.pumpActive) {
+              setPumpState(false);
+              logSerial(">> [RELE DESACTIVADO] Humedad suficiente -> Bomba apagada");
+            }
+          }, 350);
+        }
+      }
+
+      // Si la bomba está activa, regar e incrementar humedad
+      if (STATE.pumpActive) {
+        STATE.moisturePct = Math.min(100, STATE.moisturePct + 12);
+        updateVisuals();
+      }
+    }
+
+    function setPumpState(active) {
+      STATE.pumpActive = active;
+      if (active) {
+        statusDot.className = "w-2.5 h-2.5 rounded-full bg-blue-500 animate-ping";
+        statusText.textContent = "REGANDO";
+        statusText.className = "text-blue-400 font-bold";
+      } else {
+        statusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500";
+        statusText.textContent = "MONITOREANDO";
+        statusText.className = "text-emerald-400 font-medium";
+      }
+      updateVisuals();
+    }
+
+    // Slider manual
+    moistureSlider.addEventListener('input', (e) => {
+      STATE.moisturePct = parseFloat(e.target.value);
+      updateVisuals();
+    });
+
+    // Modo automático toggle
+    autoModeToggle.addEventListener('change', (e) => {
+      STATE.autoMode = e.target.checked;
+      btnManualPump.disabled = STATE.autoMode;
+      logSerial(`Modo cambiado a: ${STATE.autoMode ? 'AUTOMÁTICO' : 'MANUAL'}`);
+      if (!STATE.autoMode && STATE.pumpActive) {
+        setPumpState(false);
+      }
+    });
+
+    // Botón manual para pulsar la bomba
+    btnManualPump.addEventListener('click', () => {
+      if (STATE.autoMode) return;
+      setPumpState(!STATE.pumpActive);
+      logSerial(`Operación manual: Bomba ${STATE.pumpActive ? 'ENCENDIDA' : 'APAGADA'}`);
+    });
+
+    // Control de secado / evaporación natural
+    btnToggleEvap.addEventListener('click', () => {
+      STATE.naturalEvap = !STATE.naturalEvap;
+      if (STATE.naturalEvap) {
+        evaporationBadge.textContent = "ACTIVA";
+        evaporationBadge.className = "text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20";
+        btnToggleEvap.textContent = "Pausar Secado Natural";
+      } else {
+        evaporationBadge.textContent = "PAUSADA";
+        evaporationBadge.className = "text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700";
+        btnToggleEvap.textContent = "Activar Secado Natural";
+      }
+    });
+
+    // Botón reiniciar MCU
+    btnPower.addEventListener('click', () => {
+      logSerial("--- Reiniciando Microcontrolador ---");
+      setPumpState(false);
+      highlightLines(['line5', 'line6', 'line7', 'line8']);
+      logSerial("setup() completado. Serial disponible.");
+    });
+
+    // Limpiar monitor
+    btnClearSerial.addEventListener('click', () => {
+      serialConsole.innerHTML = '';
+    });
+
+    // Copiar código al portapapeles
+    btnCopyCode.addEventListener('click', () => {
+      const code = document.getElementById('codeBlock').innerText;
+      const el = document.createElement('textarea');
+      el.value = code;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+
+      btnCopyCode.innerHTML = `<i class="fa-solid fa-check text-emerald-400"></i> Copiado`;
+      setTimeout(() => {
+        btnCopyCode.innerHTML = `<i class="fa-regular fa-copy"></i> Copiar`;
+      }, 2000);
+    });
+
+    window.onload = () => {
+      logSerial("Iniciando Arduino UNO...");
+      logSerial("Bomba lista en D7. Sensor en A0.");
+      updateVisuals();
+
+      // Bucle de lectura de Arduino (cada 1.4 segundos)
+      STATE.loopInterval = setInterval(executeArduinoLoop, 1400);
+
+      // Bucle de evaporación natural de la tierra (cada 2.5 segundos)
+      STATE.evapInterval = setInterval(() => {
+        if (STATE.naturalEvap && !STATE.pumpActive && STATE.moisturePct > 5) {
+          STATE.moisturePct = Math.max(5, STATE.moisturePct - 2);
+          updateVisuals();
+        }
+      }, 2500);
+    };
+  </script>
+</body>
+</html>
